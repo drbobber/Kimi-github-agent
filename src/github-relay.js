@@ -1,5 +1,6 @@
 import { processTask } from './task-processor.js';
-import { notifyTaskStart, notifyTaskComplete, notifyTaskFailed } from './notifier.js';
+import { notifyTaskStart, notifyTaskComplete, notifyTaskFailed, notifyRetry } from './notifier.js';
+import { getErrorConfig, getMaxRetries, getRetryDelayMinutes, isAutoRetryEnabled } from './config-loader.js';
 
 /**
  * GitHubRelay manages the task queue and processes GitHub webhook events
@@ -47,7 +48,15 @@ export class GitHubRelay {
 
       try {
         console.log(`\n🚀 Processing task ${task.id}...`);
-        await notifyTaskStart(task);
+        
+        // Notify retry if this is not the first attempt
+        if (task.retries > 0) {
+          const config = await getErrorConfig();
+          const maxRetries = getMaxRetries(config);
+          await notifyRetry(task, task.retries + 1, maxRetries);
+        } else {
+          await notifyTaskStart(task);
+        }
 
         const result = await processTask(
           task,
@@ -61,13 +70,36 @@ export class GitHubRelay {
       } catch (error) {
         console.error('❌ Task failed:', error.message);
 
-        // Retry logic
-        const maxRetries = parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
-        if (task.retries < maxRetries && this.shouldRetry(error)) {
+        // Retry logic with exponential backoff
+        const config = await getErrorConfig();
+        const maxRetries = getMaxRetries(config);
+        const enableAutoRetry = isAutoRetryEnabled(config);
+        
+        if (task.retries < maxRetries && enableAutoRetry && this.shouldRetry(error)) {
           task.retries++;
-          console.log(`🔄 Retrying task (attempt ${task.retries}/${maxRetries})...`);
-          this.queue.unshift(task); // Re-add to front of queue
+          
+          // Calculate delay with exponential backoff
+          const delayMinutes = getRetryDelayMinutes(config);
+          const delayIndex = Math.min(task.retries - 1, delayMinutes.length - 1);
+          const delayMs = delayMinutes[delayIndex] * 60 * 1000;
+          
+          console.log(`🔄 Scheduling retry ${task.retries}/${maxRetries} in ${delayMinutes[delayIndex]} minutes...`);
+          
+          // Schedule retry with delay
+          // NOTE: Retries scheduled with setTimeout are lost if the process restarts.
+          // After restart, failed tasks won't automatically retry.
+          // Workaround: Manually re-add 'kimi-ready' label to retry the task.
+          // For production use with high reliability requirements, consider implementing
+          // a persistent queue (e.g., Redis, database, or file-based queue).
+          setTimeout(() => {
+            console.log(`⏰ Retry delay complete, re-queuing task ${task.id}...`);
+            this.queue.unshift(task); // Re-add to front of queue
+            if (!this.isProcessing) {
+              this.processQueue();
+            }
+          }, delayMs);
         } else {
+          // Max retries reached or non-retryable error
           await notifyTaskFailed(task, error);
         }
       } finally {

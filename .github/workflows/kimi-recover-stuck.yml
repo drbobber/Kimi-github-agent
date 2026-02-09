@@ -1,0 +1,174 @@
+name: Recover Stuck Issues
+
+on:
+  schedule:
+    # Run every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      threshold_hours:
+        description: 'Hours before considering an issue stuck'
+        required: false
+        default: '2'
+        type: string
+      max_event_pages:
+        description: 'Maximum event pages to check per issue (100 events per page)'
+        required: false
+        default: '5'
+        type: string
+
+jobs:
+  recover-stuck-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+      - name: Recover stuck issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const thresholdHours = parseInt('${{ github.event.inputs.threshold_hours || '2' }}');
+            const thresholdMs = thresholdHours * 60 * 60 * 1000;
+            const maxEventPages = parseInt('${{ github.event.inputs.max_event_pages || '5' }}');
+            const eventsPerPage = 100; // GitHub API events per page
+            
+            console.log(`🔍 Looking for issues stuck with 'kimi-working' label for more than ${thresholdHours} hours...`);
+            console.log(`📄 Checking up to ${maxEventPages} pages of events per issue (${maxEventPages * eventsPerPage} events)`);
+            
+            // Get all open issues with kimi-working label
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'kimi-working',
+              per_page: 100
+            });
+            
+            console.log(`Found ${issues.data.length} issues with 'kimi-working' label`);
+            
+            let recoveredCount = 0;
+            
+            for (const issue of issues.data) {
+              // Skip pull requests
+              if (issue.pull_request) {
+                console.log(`⏭️  Skipping PR #${issue.number}`);
+                continue;
+              }
+              
+              // Check when kimi-working label was added
+              // Fetch events with pagination support
+              let allEvents = [];
+              let page = 1;
+              let hasMore = true;
+              
+              while (hasMore && page <= maxEventPages) {
+                const events = await github.rest.issues.listEvents({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  per_page: eventsPerPage,
+                  page: page
+                });
+                
+                allEvents = allEvents.concat(events.data);
+                hasMore = events.data.length === eventsPerPage;
+                page++;
+              }
+              
+              // Find the most recent 'labeled' event for 'kimi-working'
+              const labelEvent = allEvents
+                .reverse()
+                .find(e => e.event === 'labeled' && e.label?.name === 'kimi-working');
+              
+              if (!labelEvent) {
+                console.log(`⚠️  Could not find label event for issue #${issue.number}`);
+                continue;
+              }
+              
+              const labeledAt = new Date(labelEvent.created_at);
+              const now = new Date();
+              const timeSinceLabeled = now - labeledAt;
+              const hoursSinceLabeled = (timeSinceLabeled / (1000 * 60 * 60)).toFixed(2);
+              
+              console.log(`Issue #${issue.number}: labeled ${hoursSinceLabeled} hours ago`);
+              
+              // Check if stuck (labeled more than threshold hours ago)
+              if (timeSinceLabeled > thresholdMs) {
+                console.log(`🚨 Issue #${issue.number} is stuck! Recovering...`);
+                
+                // Add recovery comment
+                let commentBody = '🔄 **Stuck Issue Recovery**\n\n';
+                commentBody += `This issue has been marked as \`kimi-working\` for more than ${thresholdHours} hours without completion. `;
+                commentBody += 'This usually indicates:\n\n';
+                commentBody += '- The agent process crashed or was terminated\n';
+                commentBody += '- A network error prevented completion\n';
+                commentBody += '- The task exceeded the timeout limit\n';
+                commentBody += '- An unexpected error occurred\n\n';
+                commentBody += '**Recovery Actions Taken:**\n\n';
+                commentBody += '- Removed `kimi-working` label\n';
+                commentBody += '- Removed `in-progress` label\n';
+                commentBody += '- Added `kimi-recovered` label\n';
+                commentBody += '- Added `needs-human-review` label\n\n';
+                commentBody += '**Next Steps:**\n\n';
+                commentBody += '1. Review any error logs or comments above\n';
+                commentBody += '2. Verify if partial work was committed to a branch\n';
+                commentBody += '3. Check if the issue needs to be re-queued with `kimi-ready` label\n';
+                commentBody += '4. Consider if the issue needs human intervention or clarification\n\n';
+                commentBody += `Time since work started: ${hoursSinceLabeled} hours\n`;
+                commentBody += `Recovery triggered: ${now.toISOString()}`;
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: commentBody
+                });
+                
+                // Remove working labels
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: 'kimi-working'
+                  });
+                } catch (e) {
+                  console.log(`⚠️  Could not remove kimi-working label: ${e.message}`);
+                }
+                
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: 'in-progress'
+                  });
+                } catch (e) {
+                  console.log(`⚠️  Could not remove in-progress label: ${e.message}`);
+                }
+                
+                // Add recovery labels
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['kimi-recovered', 'needs-human-review']
+                });
+                
+                console.log(`✅ Recovered issue #${issue.number}`);
+                recoveredCount++;
+              }
+            }
+            
+            console.log(`\n✅ Recovery complete: ${recoveredCount} issue(s) recovered`);
+            
+            // Send summary to workflow summary
+            await core.summary
+              .addHeading('🔄 Stuck Issue Recovery')
+              .addRaw(`\nRecovered **${recoveredCount}** stuck issue(s)`)
+              .addRaw(`\nThreshold: ${thresholdHours} hours`)
+              .addRaw(`\nTotal issues checked: ${issues.data.length}`)
+              .write();

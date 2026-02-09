@@ -34,7 +34,9 @@ Kimi GitHub Agent enables **fully autonomous development workflows**. Write an i
 - 💾 **Context Management** - Automatic token overflow prevention
 - 🔒 **Secure** - Token-based authentication, systemd hardening
 - 📈 **Task Queue** - Sequential processing prevents conflicts
-- 🔁 **Retry Logic** - Automatic retry on transient failures
+- 🔁 **Retry Logic** - Automatic retry with exponential backoff
+- 🛡️ **Error Handling** - Comprehensive error categorization and recovery
+- 🔄 **Stuck Issue Recovery** - Automatic detection and recovery of stuck tasks
 
 ---
 
@@ -210,6 +212,13 @@ Add a dark mode toggle to the application header...
    - Updates checkboxes: `- [ ]` → `- [x]`
    - Notifies when all dependencies resolved
 
+6. **Stuck Issue Recovery** (`.github/workflows/kimi-recover-stuck.yml`)
+   - Runs every 2 hours automatically
+   - Detects issues with `kimi-working` label for >2 hours
+   - Removes stuck labels, adds recovery labels
+   - Posts recovery comment with diagnostics
+   - Can be triggered manually when needed
+
 ### Task Types
 
 - **implement_issue** - New feature or bug fix from issue
@@ -236,15 +245,18 @@ kimi-github-agent/
 │   │   ├── process-ready-issues.yml
 │   │   ├── handle-pr-failure.yml
 │   │   ├── update-dependency-checkboxes.yml
+│   │   ├── kimi-recover-stuck.yml
 │   │   └── auto-merge.yml
 │   └── ISSUE_TEMPLATE/
 │       └── kimi-task.yml      # Issue template
 ├── config/
 │   └── projects.example.json  # Multi-repo config
+├── config.json                # Error handling config
 ├── daemon/
 │   └── kimi-github-agent.service  # Systemd service
 ├── scripts/
 │   ├── setup.sh              # Installation script
+│   ├── setup-labels.sh       # Label creation script
 │   └── health-check.sh       # Health monitoring
 ├── docs/
 │   ├── SETUP.md              # Installation guide
@@ -308,6 +320,32 @@ Create `config/projects.json`:
 }
 ```
 
+### Error Handling Configuration
+
+Configure automatic retry and error handling in `config.json`:
+
+```json
+{
+  "errorHandling": {
+    "maxRetries": 3,
+    "retryDelayMinutes": [5, 15, 30],
+    "stuckIssueThresholdHours": 2,
+    "enableAutoRetry": true,
+    "notifyOnFailure": true
+  }
+}
+```
+
+**Configuration Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `maxRetries` | number | `3` | Maximum number of retry attempts |
+| `retryDelayMinutes` | array | `[5, 15, 30]` | Delay in minutes for each retry attempt |
+| `stuckIssueThresholdHours` | number | `2` | Hours before issue considered stuck |
+| `enableAutoRetry` | boolean | `true` | Enable automatic retries on failure |
+| `notifyOnFailure` | boolean | `true` | Send notifications on task failure |
+
 ---
 
 ## 🚀 Deployment
@@ -348,6 +386,105 @@ curl http://localhost:3000/health
 # Run health check script
 ./scripts/health-check.sh
 ```
+
+---
+
+## 🔧 Error Handling & Recovery
+
+### Automatic Error Handling
+
+The agent includes comprehensive error handling to prevent stuck issues and ensure reliable operation:
+
+**Error Categories:**
+- 💳 **Quota Exceeded** - Kimi token/credit limits reached
+- 📊 **Context Overflow** - Task too large for context window  
+- 🌐 **Network Error** - Connection or API failures
+- ⏱️ **Timeout** - Task exceeded maximum time limit
+- 🔀 **Git Conflict** - Branch divergence or merge conflicts
+- ❓ **Unknown** - Unexpected errors
+
+**Automatic Recovery:**
+- Tasks automatically retry up to 3 times with exponential backoff (5min, 15min, 30min)
+- Failed tasks are labeled with error type for easy diagnosis
+- Detailed error reports posted as issue comments with suggestions
+- Telegram notifications for all failures (if configured)
+
+**Stuck Issue Detection:**
+- Recovery workflow runs every 2 hours
+- Detects issues with `kimi-working` label for >2 hours
+- Automatically removes stuck labels and adds `kimi-recovered` + `needs-human-review`
+- Can be triggered manually via GitHub Actions
+
+### Label System
+
+The agent uses a comprehensive label system for state tracking:
+
+**Status Labels:**
+- `kimi-ready` 🟢 - Ready for processing
+- `kimi-working` 🔵 - Currently processing
+- `in-progress` 🟡 - Work in progress
+- `pr-created` 🟣 - PR has been created
+- `kimi-failed` 🔴 - Processing failed
+- `kimi-recovered` 🟠 - Recovered from stuck state
+- `needs-human-review` 🔴 - Requires manual intervention
+
+**Error Type Labels:**
+- `error-quota_exceeded`, `error-context_overflow`, `error-network_error`
+- `error-timeout`, `error-git_conflict`, `error-unknown`
+
+**Retry Labels:**
+- `retry-1`, `retry-2`, `retry-3` - Track retry attempts
+
+### Configuration
+
+Configure error handling in `config.json`:
+
+```json
+{
+  "errorHandling": {
+    "maxRetries": 3,
+    "retryDelayMinutes": [5, 15, 30],
+    "stuckIssueThresholdHours": 2,
+    "enableAutoRetry": true,
+    "notifyOnFailure": true
+  }
+}
+```
+
+### Setup Labels
+
+Run the label setup script for your repository:
+
+```bash
+# Using GitHub CLI
+./scripts/setup-labels.sh owner/repo
+
+# Or with GITHUB_TOKEN environment variable
+GITHUB_TOKEN=ghp_xxx ./scripts/setup-labels.sh owner/repo
+```
+
+### Troubleshooting
+
+**Issue stuck with `kimi-working` label:**
+- Wait for automatic recovery (runs every 2 hours)
+- Or trigger manual recovery: Actions → "Recover Stuck Issues" → Run workflow
+
+**Task keeps failing with same error:**
+- Check error type label for specific issue
+- Review suggestions in error comment
+- After 3 failures, manual intervention is required
+
+**Quota exceeded errors:**
+- Check Kimi CLI account balance
+- Consider breaking large tasks into smaller issues
+- Upgrade Kimi subscription if needed
+
+**Context overflow errors:**
+- Break issue into smaller, focused sub-tasks
+- Reduce scope of required changes
+- Simplify requirements
+
+**For more details, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)**
 
 ---
 

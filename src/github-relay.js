@@ -101,6 +101,9 @@ export class GitHubRelay {
           console.log(`🔄 Scheduling retry ${task.retries}/${maxRetries} in ${delayMinutes[delayIndex]} minutes...`);
           
           // Schedule retry with delay
+          // NOTE: Retries scheduled with setTimeout are lost if the process restarts.
+          // For production use with high reliability requirements, consider implementing
+          // a persistent queue (e.g., Redis, database, or file-based queue).
           setTimeout(() => {
             console.log(`⏰ Retry delay complete, re-queuing task ${task.id}...`);
             this.queue.unshift(task); // Re-add to front of queue

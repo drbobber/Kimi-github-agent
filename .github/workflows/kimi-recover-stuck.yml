@@ -51,15 +51,27 @@ jobs:
               }
               
               // Check when kimi-working label was added
-              const events = await github.rest.issues.listEvents({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                per_page: 100
-              });
+              // Fetch events with pagination support
+              let allEvents = [];
+              let page = 1;
+              let hasMore = true;
+              
+              while (hasMore && page <= 5) { // Limit to 5 pages (500 events) to prevent runaway queries
+                const events = await github.rest.issues.listEvents({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  per_page: 100,
+                  page: page
+                });
+                
+                allEvents = allEvents.concat(events.data);
+                hasMore = events.data.length === 100;
+                page++;
+              }
               
               // Find the most recent 'labeled' event for 'kimi-working'
-              const labelEvent = events.data
+              const labelEvent = allEvents
                 .reverse()
                 .find(e => e.event === 'labeled' && e.label?.name === 'kimi-working');
               

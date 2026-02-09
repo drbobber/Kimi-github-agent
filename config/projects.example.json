@@ -1,0 +1,19 @@
+{
+  "projects": [
+    {
+      "repository": "owner/repo",
+      "defaultBranch": "main",
+      "packageManager": "pnpm",
+      "enabled": true,
+      "buildCommand": "npm run build",
+      "testCommand": "npm test",
+      "lintCommand": "npm run lint"
+    },
+    {
+      "repository": "owner/another-repo",
+      "defaultBranch": "master",
+      "packageManager": "npm",
+      "enabled": true
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import { buildImplementationPrompt, buildFixPrompt, buildReviewResponsePrompt } 
 import { createPullRequest, addComment, addLabels, removeLabel } from './github-api.js';
 import { notifyHumanRequired, notifyTaskFailure } from './notifier.js';
 import { getErrorConfig, getMaxRetries } from './config-loader.js';
+import { sanitizeInput } from './validators.js';
 
 /**
  * Error types for categorization
@@ -380,6 +381,7 @@ async function handleReviewResponse(task, workspaceManager, contextManager) {
 
 /**
  * Execute Kimi CLI with the given prompt
+ * SECURITY: Uses array arguments and no shell to prevent injection attacks
  */
 async function executeKimi(workingDir, prompt, sessionId, contextManager) {
   return new Promise((resolve, reject) => {
@@ -388,13 +390,21 @@ async function executeKimi(workingDir, prompt, sessionId, contextManager) {
 
     console.log(`🤖 Executing Kimi CLI in ${workingDir}...`);
 
-    // Track context
-    contextManager.addMessage(sessionId, 'user', prompt);
+    // Sanitize prompt to prevent injection attacks
+    const sanitizedPrompt = sanitizeInput(prompt);
+    if (!sanitizedPrompt || sanitizedPrompt.length === 0) {
+      return reject(new Error('Invalid or empty prompt after sanitization'));
+    }
 
-    const kimi = spawn(kimiPath, [prompt], {
+    // Track context
+    contextManager.addMessage(sessionId, 'user', sanitizedPrompt);
+
+    // SECURITY FIX: Use array arguments and no shell to prevent command injection
+    // This ensures the prompt is passed as a single argument, not parsed by shell
+    const kimi = spawn(kimiPath, [sanitizedPrompt], {
       cwd: workingDir,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true
+      stdio: ['pipe', 'pipe', 'pipe']
+      // REMOVED: shell: true - prevents command injection vulnerability
     });
 
     let output = '';
@@ -434,7 +444,16 @@ async function executeKimi(workingDir, prompt, sessionId, contextManager) {
 
     kimi.on('error', (error) => {
       clearTimeout(timeoutId);
-      reject(new Error(`Failed to execute Kimi: ${error.message}`));
+      
+      // Provide helpful error messages
+      if (error.code === 'ENOENT') {
+        reject(new Error(
+          `Kimi CLI not found at path: ${kimiPath}. ` +
+          'Please install Kimi CLI or set KIMI_PATH environment variable.'
+        ));
+      } else {
+        reject(new Error(`Failed to execute Kimi: ${error.message}`));
+      }
     });
   });
 }

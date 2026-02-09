@@ -1,116 +1,61 @@
 #!/bin/bash
 
-# Setup Labels Script
-# Creates all required labels for Kimi GitHub Agent error handling and recovery
+# Setup GitHub labels for Kimi GitHub Agent
+# Usage: ./scripts/setup-labels.sh owner/repo
+# Or with token: GITHUB_TOKEN=ghp_xxx ./scripts/setup-labels.sh owner/repo
 
 set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Usage information
-usage() {
-  echo "Usage: $0 <owner/repo>"
-  echo ""
-  echo "Example: $0 drbobber/Kimi-github-agent"
-  echo ""
-  echo "Environment: Requires either authenticated 'gh' CLI or GITHUB_TOKEN (for API fallback)"
+if [ -z "$1" ]; then
+  echo "Usage: $0 owner/repo"
+  echo "Example: $0 drbobber/my-project"
   exit 1
-}
-
-# Check arguments
-if [ $# -ne 1 ]; then
-  usage
 fi
 
-REPO=$1
+REPO="$1"
 
-# Check for GitHub CLI or GITHUB_TOKEN
+echo "🏷️  Setting up labels for $REPO..."
+echo ""
+
+# Check if gh CLI is installed
 if ! command -v gh &> /dev/null; then
-  if [ -z "$GITHUB_TOKEN" ]; then
-    echo -e "${RED}Error: Neither 'gh' CLI nor GITHUB_TOKEN environment variable found${NC}"
-    echo "Please install GitHub CLI or set GITHUB_TOKEN"
-    exit 1
-  fi
-  USE_API=true
-else
-  USE_API=false
+  echo "❌ GitHub CLI (gh) is not installed."
+  echo "📦 Install it from: https://cli.github.com/"
+  exit 1
 fi
 
-echo -e "${BLUE}🏷️  Setting up labels for ${REPO}...${NC}\n"
+# Status labels
+echo "Creating status labels..."
+gh label create "kimi-ready" --color "0E8A16" --description "Ready for Kimi agent to process" --repo "$REPO" --force 2>/dev/null || true
+gh label create "kimi-working" --color "1D76DB" --description "Kimi agent is currently working" --repo "$REPO" --force 2>/dev/null || true
+gh label create "in-progress" --color "FBCA04" --description "Work in progress" --repo "$REPO" --force 2>/dev/null || true
+gh label create "pr-created" --color "6F42C1" --description "PR has been created" --repo "$REPO" --force 2>/dev/null || true
+gh label create "kimi-failed" --color "D93F0B" --description "Kimi agent failed" --repo "$REPO" --force 2>/dev/null || true
+gh label create "kimi-recovered" --color "FFA500" --description "Recovered from stuck state" --repo "$REPO" --force 2>/dev/null || true
+gh label create "needs-human-review" --color "B60205" --description "Requires human intervention" --repo "$REPO" --force 2>/dev/null || true
+gh label create "kimi-implemented" --color "0E8A16" --description "Successfully implemented by Kimi" --repo "$REPO" --force 2>/dev/null || true
 
-# Function to create label using GitHub CLI
-create_label_gh() {
-  local name=$1
-  local color=$2
-  local description=$3
-  
-  if gh label list -R "$REPO" | grep -q "^${name}"; then
-    echo -e "${YELLOW}⏭️  Label '${name}' already exists${NC}"
-  else
-    gh label create "$name" --color "$color" --description "$description" -R "$REPO" 2>/dev/null
-    echo -e "${GREEN}✅ Created label '${name}'${NC}"
-  fi
-}
+# Error type labels
+echo "Creating error type labels..."
+gh label create "error-quota_exceeded" --color "D93F0B" --description "API quota exceeded" --repo "$REPO" --force 2>/dev/null || true
+gh label create "error-context_overflow" --color "D93F0B" --description "Context limit exceeded" --repo "$REPO" --force 2>/dev/null || true
+gh label create "error-network_error" --color "D93F0B" --description "Network error" --repo "$REPO" --force 2>/dev/null || true
+gh label create "error-timeout" --color "D93F0B" --description "Task timeout" --repo "$REPO" --force 2>/dev/null || true
+gh label create "error-git_conflict" --color "D93F0B" --description "Git conflict" --repo "$REPO" --force 2>/dev/null || true
+gh label create "error-unknown" --color "D93F0B" --description "Unknown error" --repo "$REPO" --force 2>/dev/null || true
 
-# Function to create label using API
-create_label_api() {
-  local name=$1
-  local color=$2
-  local description=$3
-  
-  # Check if label exists
-  response=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer $GITHUB_TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/${REPO}/labels/${name}")
-  
-  if [ "$response" = "200" ]; then
-    echo -e "${YELLOW}⏭️  Label '${name}' already exists${NC}"
-  else
-    curl -s -X POST \
-      -H "Authorization: Bearer $GITHUB_TOKEN" \
-      -H "Accept: application/vnd.github+json" \
-      "https://api.github.com/repos/${REPO}/labels" \
-      -d "{\"name\":\"${name}\",\"color\":\"${color}\",\"description\":\"${description}\"}" > /dev/null
-    echo -e "${GREEN}✅ Created label '${name}'${NC}"
-  fi
-}
+# Retry labels
+echo "Creating retry labels..."
+gh label create "retry-1" --color "FFA500" --description "First retry attempt" --repo "$REPO" --force 2>/dev/null || true
+gh label create "retry-2" --color "FF8C00" --description "Second retry attempt" --repo "$REPO" --force 2>/dev/null || true
+gh label create "retry-3" --color "FF4500" --description "Third retry attempt (final)" --repo "$REPO" --force 2>/dev/null || true
 
-# Wrapper function to create label
-create_label() {
-  if [ "$USE_API" = true ]; then
-    create_label_api "$@"
-  else
-    create_label_gh "$@"
-  fi
-}
-
-echo -e "${BLUE}📊 Status Labels${NC}"
-create_label "kimi-ready" "28a745" "Ready for Kimi agent to process"
-create_label "kimi-working" "0366d6" "Kimi agent is currently working on this"
-create_label "in-progress" "fbca04" "Work is in progress"
-create_label "pr-created" "8b5cf6" "Pull request has been created"
-create_label "kimi-failed" "d73a4a" "Kimi agent failed to process this task"
-create_label "kimi-recovered" "ff9800" "Recovered from stuck state"
-create_label "needs-human-review" "b60205" "Requires human intervention"
-create_label "kimi-implemented" "0e8a16" "Successfully implemented by Kimi agent"
-
-echo -e "\n${BLUE}🚨 Error Type Labels${NC}"
-create_label "error-quota_exceeded" "d73a4a" "Task failed due to quota/token limits"
-create_label "error-context_overflow" "d73a4a" "Task failed due to context window overflow"
-create_label "error-network_error" "d73a4a" "Task failed due to network issues"
-create_label "error-timeout" "d73a4a" "Task failed due to timeout"
-create_label "error-git_conflict" "d73a4a" "Task failed due to git conflicts"
-create_label "error-unknown" "d73a4a" "Task failed with unknown error"
-
-echo -e "\n${BLUE}🔄 Retry Labels${NC}"
-create_label "retry-1" "ff6b6b" "First retry attempt"
-create_label "retry-2" "ff8c42" "Second retry attempt"
-create_label "retry-3" "ffd93d" "Third retry attempt - needs review after this"
-
-echo -e "\n${GREEN}✅ All labels created successfully!${NC}"
+echo ""
+echo "✅ All labels created successfully for $REPO!"
+echo ""
+echo "📋 Summary:"
+echo "   - 8 status labels"
+echo "   - 6 error type labels"
+echo "   - 3 retry labels"
+echo ""
+echo "💡 Tip: View all labels at: https://github.com/$REPO/labels"

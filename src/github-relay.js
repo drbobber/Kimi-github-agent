@@ -1,5 +1,21 @@
 import { processTask } from './task-processor.js';
-import { notifyTaskStart, notifyTaskComplete, notifyTaskFailed } from './notifier.js';
+import { notifyTaskStart, notifyTaskComplete, notifyTaskFailed, notifyRetry } from './notifier.js';
+import fs from 'fs/promises';
+import path from 'path';
+
+/**
+ * Load configuration from config.json
+ */
+async function loadConfig() {
+  try {
+    const configPath = path.join(process.cwd(), 'config.json');
+    const content = await fs.readFile(configPath, 'utf-8');
+    return JSON.parse(content);
+  } catch (error) {
+    console.warn('⚠️  Could not load config.json, using defaults');
+    return {};
+  }
+}
 
 /**
  * GitHubRelay manages the task queue and processes GitHub webhook events
@@ -47,7 +63,15 @@ export class GitHubRelay {
 
       try {
         console.log(`\n🚀 Processing task ${task.id}...`);
-        await notifyTaskStart(task);
+        
+        // Notify retry if this is not the first attempt
+        if (task.retries > 0) {
+          const config = await loadConfig();
+          const maxRetries = config.errorHandling?.maxRetries || parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
+          await notifyRetry(task, task.retries + 1, maxRetries);
+        } else {
+          await notifyTaskStart(task);
+        }
 
         const result = await processTask(
           task,
@@ -61,13 +85,31 @@ export class GitHubRelay {
       } catch (error) {
         console.error('❌ Task failed:', error.message);
 
-        // Retry logic
-        const maxRetries = parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
-        if (task.retries < maxRetries && this.shouldRetry(error)) {
+        // Retry logic with exponential backoff
+        const config = await loadConfig();
+        const maxRetries = config.errorHandling?.maxRetries || parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
+        const enableAutoRetry = config.errorHandling?.enableAutoRetry !== false;
+        
+        if (task.retries < maxRetries && enableAutoRetry && this.shouldRetry(error)) {
           task.retries++;
-          console.log(`🔄 Retrying task (attempt ${task.retries}/${maxRetries})...`);
-          this.queue.unshift(task); // Re-add to front of queue
+          
+          // Calculate delay with exponential backoff
+          const delayMinutes = config.errorHandling?.retryDelayMinutes || [5, 15, 30];
+          const delayIndex = Math.min(task.retries - 1, delayMinutes.length - 1);
+          const delayMs = delayMinutes[delayIndex] * 60 * 1000;
+          
+          console.log(`🔄 Scheduling retry ${task.retries}/${maxRetries} in ${delayMinutes[delayIndex]} minutes...`);
+          
+          // Schedule retry with delay
+          setTimeout(() => {
+            console.log(`⏰ Retry delay complete, re-queuing task ${task.id}...`);
+            this.queue.unshift(task); // Re-add to front of queue
+            if (!this.isProcessing) {
+              this.processQueue();
+            }
+          }, delayMs);
         } else {
+          // Max retries reached or non-retryable error
           await notifyTaskFailed(task, error);
         }
       } finally {

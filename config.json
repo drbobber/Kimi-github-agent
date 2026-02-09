@@ -1,0 +1,9 @@
+{
+  "errorHandling": {
+    "maxRetries": 3,
+    "retryDelayMinutes": [5, 15, 30],
+    "stuckIssueThresholdHours": 2,
+    "enableAutoRetry": true,
+    "notifyOnFailure": true
+  }
+}

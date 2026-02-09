@@ -1,0 +1,158 @@
+name: Recover Stuck Issues
+
+on:
+  schedule:
+    # Run every 2 hours
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      threshold_hours:
+        description: 'Hours before considering an issue stuck'
+        required: false
+        default: '2'
+        type: string
+
+jobs:
+  recover-stuck-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+      - name: Recover stuck issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const thresholdHours = parseInt('${{ github.event.inputs.threshold_hours || '2' }}');
+            const thresholdMs = thresholdHours * 60 * 60 * 1000;
+            
+            console.log(`🔍 Looking for issues stuck with 'kimi-working' label for more than ${thresholdHours} hours...`);
+            
+            // Get all open issues with kimi-working label
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'kimi-working',
+              per_page: 100
+            });
+            
+            console.log(`Found ${issues.data.length} issues with 'kimi-working' label`);
+            
+            let recoveredCount = 0;
+            
+            for (const issue of issues.data) {
+              // Skip pull requests
+              if (issue.pull_request) {
+                console.log(`⏭️  Skipping PR #${issue.number}`);
+                continue;
+              }
+              
+              // Check when kimi-working label was added
+              const events = await github.rest.issues.listEvents({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                per_page: 100
+              });
+              
+              // Find the most recent 'labeled' event for 'kimi-working'
+              const labelEvent = events.data
+                .reverse()
+                .find(e => e.event === 'labeled' && e.label?.name === 'kimi-working');
+              
+              if (!labelEvent) {
+                console.log(`⚠️  Could not find label event for issue #${issue.number}`);
+                continue;
+              }
+              
+              const labeledAt = new Date(labelEvent.created_at);
+              const now = new Date();
+              const timeSinceLabeled = now - labeledAt;
+              const hoursSinceLabeled = (timeSinceLabeled / (1000 * 60 * 60)).toFixed(2);
+              
+              console.log(`Issue #${issue.number}: labeled ${hoursSinceLabeled} hours ago`);
+              
+              // Check if stuck (labeled more than threshold hours ago)
+              if (timeSinceLabeled > thresholdMs) {
+                console.log(`🚨 Issue #${issue.number} is stuck! Recovering...`);
+                
+                // Add recovery comment
+                const commentBody = `🔄 **Stuck Issue Recovery**
+                
+This issue has been marked as \`kimi-working\` for more than ${thresholdHours} hours without completion. This usually indicates:
+
+- The agent process crashed or was terminated
+- A network error prevented completion
+- The task exceeded the timeout limit
+- An unexpected error occurred
+
+**Recovery Actions Taken:**
+✅ Removed \`kimi-working\` label
+✅ Removed \`in-progress\` label  
+✅ Added \`kimi-recovered\` label
+✅ Added \`needs-human-review\` label
+
+**Next Steps:**
+1. Review any error logs or comments above
+2. Verify if partial work was committed to a branch
+3. Check if the issue needs to be re-queued with \`kimi-ready\` label
+4. Consider if the issue needs human intervention or clarification
+
+Time since work started: ${hoursSinceLabeled} hours
+Recovery triggered: ${now.toISOString()}`;
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: commentBody
+                });
+                
+                // Remove working labels
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: 'kimi-working'
+                  });
+                } catch (e) {
+                  console.log(`⚠️  Could not remove kimi-working label: ${e.message}`);
+                }
+                
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: 'in-progress'
+                  });
+                } catch (e) {
+                  console.log(`⚠️  Could not remove in-progress label: ${e.message}`);
+                }
+                
+                // Add recovery labels
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['kimi-recovered', 'needs-human-review']
+                });
+                
+                console.log(`✅ Recovered issue #${issue.number}`);
+                recoveredCount++;
+              }
+            }
+            
+            console.log(`\n✅ Recovery complete: ${recoveredCount} issue(s) recovered`);
+            
+            // Send summary to workflow summary
+            await core.summary
+              .addHeading('🔄 Stuck Issue Recovery')
+              .addRaw(`\nRecovered **${recoveredCount}** stuck issue(s)`)
+              .addRaw(`\nThreshold: ${thresholdHours} hours`)
+              .addRaw(`\nTotal issues checked: ${issues.data.length}`)
+              .write();

@@ -1,7 +1,229 @@
 import { spawn } from 'child_process';
 import { buildImplementationPrompt, buildFixPrompt, buildReviewResponsePrompt } from './prompt-builder.js';
 import { createPullRequest, addComment, addLabels, removeLabel } from './github-api.js';
-import { notifyHumanRequired } from './notifier.js';
+import { notifyHumanRequired, notifyTaskFailure } from './notifier.js';
+import fs from 'fs/promises';
+import path from 'path';
+
+/**
+ * Error types for categorization
+ */
+export const ErrorType = {
+  QUOTA_EXCEEDED: 'quota_exceeded',
+  CONTEXT_OVERFLOW: 'context_overflow',
+  NETWORK_ERROR: 'network_error',
+  TIMEOUT: 'timeout',
+  GIT_CONFLICT: 'git_conflict',
+  UNKNOWN: 'unknown'
+};
+
+/**
+ * Categorize error based on error message and context
+ */
+function categorizeError(error) {
+  const message = error.message.toLowerCase();
+  
+  // Check for quota/token errors
+  if (message.includes('quota') || message.includes('rate limit') || 
+      message.includes('token limit') || message.includes('insufficient credits')) {
+    return ErrorType.QUOTA_EXCEEDED;
+  }
+  
+  // Check for context overflow
+  if (message.includes('context') && (message.includes('too large') || message.includes('overflow') ||
+      message.includes('token limit exceeded') || message.includes('context window'))) {
+    return ErrorType.CONTEXT_OVERFLOW;
+  }
+  
+  // Check for network errors
+  if (message.includes('network') || message.includes('econnrefused') || 
+      message.includes('enotfound') || message.includes('etimedout') ||
+      message.includes('econnreset') || message.includes('fetch failed')) {
+    return ErrorType.NETWORK_ERROR;
+  }
+  
+  // Check for timeout errors
+  if (message.includes('timeout') || message.includes('timed out')) {
+    return ErrorType.TIMEOUT;
+  }
+  
+  // Check for git conflict errors
+  if (message.includes('conflict') || message.includes('merge') || 
+      message.includes('diverged') || message.includes('rejected')) {
+    return ErrorType.GIT_CONFLICT;
+  }
+  
+  return ErrorType.UNKNOWN;
+}
+
+/**
+ * Get error details for user-friendly display
+ */
+function getErrorDetails(errorType) {
+  const details = {
+    [ErrorType.QUOTA_EXCEEDED]: {
+      title: '💳 Quota/Token Limit Exceeded',
+      description: 'The Kimi CLI has run out of tokens or hit a quota limit.',
+      suggestions: [
+        'Wait for quota to reset (usually hourly or daily)',
+        'Check Kimi account credit balance',
+        'Consider upgrading Kimi subscription if this happens frequently',
+        'Break down large tasks into smaller sub-issues'
+      ]
+    },
+    [ErrorType.CONTEXT_OVERFLOW]: {
+      title: '📊 Context Window Overflow',
+      description: 'The task is too large for the AI context window.',
+      suggestions: [
+        'Break the issue into smaller, focused sub-tasks',
+        'Reduce the scope of changes required',
+        'Simplify the implementation requirements',
+        'Consider manual implementation for very large changes'
+      ]
+    },
+    [ErrorType.NETWORK_ERROR]: {
+      title: '🌐 Network Error',
+      description: 'A network connection error prevented task completion.',
+      suggestions: [
+        'This is typically a transient error - retry should work',
+        'Check if Kimi API is accessible',
+        'Verify network connectivity',
+        'Check for firewall or proxy issues'
+      ]
+    },
+    [ErrorType.TIMEOUT]: {
+      title: '⏱️ Task Timeout',
+      description: 'The task took longer than the maximum allowed time.',
+      suggestions: [
+        'Break the issue into smaller tasks',
+        'Simplify the requirements',
+        'Increase TASK_TIMEOUT_MS if appropriate',
+        'Consider if the task is too complex for automation'
+      ]
+    },
+    [ErrorType.GIT_CONFLICT]: {
+      title: '🔀 Git Conflict',
+      description: 'Changes could not be pushed due to conflicts or diverged branches.',
+      suggestions: [
+        'Someone else may have pushed to the same branch',
+        'The base branch may have been updated',
+        'Manual intervention may be needed to resolve conflicts',
+        'Check the branch state in the repository'
+      ]
+    },
+    [ErrorType.UNKNOWN]: {
+      title: '❓ Unknown Error',
+      description: 'An unexpected error occurred.',
+      suggestions: [
+        'Check the error logs for more details',
+        'Review the task requirements for issues',
+        'Verify all dependencies are available',
+        'Contact support if the issue persists'
+      ]
+    }
+  };
+  
+  return details[errorType] || details[ErrorType.UNKNOWN];
+}
+
+/**
+ * Load error handling configuration
+ */
+async function loadErrorConfig() {
+  try {
+    const configPath = path.join(process.cwd(), 'config.json');
+    const content = await fs.readFile(configPath, 'utf-8');
+    const config = JSON.parse(content);
+    return config.errorHandling || {};
+  } catch (error) {
+    console.warn('⚠️  Could not load config.json, using defaults');
+    return {};
+  }
+}
+
+/**
+ * Handle task error with proper logging, labeling, and notifications
+ */
+async function handleTaskError(task, error) {
+  const errorType = categorizeError(error);
+  const errorDetails = getErrorDetails(errorType);
+  const config = await loadErrorConfig();
+  
+  console.error(`❌ Task failed with ${errorType}:`, error.message);
+  
+  // Prepare error comment for GitHub issue
+  const retryInfo = task.retries ? ` (Attempt ${task.retries + 1})` : '';
+  let commentBody = `## ${errorDetails.title}${retryInfo}\n\n`;
+  commentBody += `**Description:** ${errorDetails.description}\n\n`;
+  commentBody += `**Error Message:**\n\`\`\`\n${error.message}\n\`\`\`\n\n`;
+  commentBody += `**Suggestions:**\n`;
+  errorDetails.suggestions.forEach(suggestion => {
+    commentBody += `- ${suggestion}\n`;
+  });
+  
+  const maxRetries = config.maxRetries || parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
+  const willRetry = task.retries < maxRetries && config.enableAutoRetry !== false;
+  
+  if (willRetry) {
+    const nextRetry = task.retries + 1;
+    const delays = config.retryDelayMinutes || [5, 15, 30];
+    const delayMinutes = delays[Math.min(nextRetry - 1, delays.length - 1)] || 5;
+    commentBody += `\n**Auto-retry:** This task will be retried automatically in approximately ${delayMinutes} minutes.\n`;
+    commentBody += `Retry ${nextRetry} of ${maxRetries}\n`;
+  } else if (task.retries >= maxRetries) {
+    commentBody += `\n**⚠️ Maximum retries reached.** Human intervention is required.\n`;
+  }
+  
+  // Add comment to issue
+  if (task.issue) {
+    try {
+      await addComment(task.repository, task.issue.number, commentBody);
+    } catch (err) {
+      console.error('Failed to add error comment:', err);
+    }
+  }
+  
+  // Update labels
+  const labelsToAdd = [`error-${errorType}`];
+  const labelsToRemove = ['kimi-working', 'in-progress'];
+  
+  if (!willRetry) {
+    labelsToAdd.push('kimi-failed');
+    if (task.retries >= maxRetries) {
+      labelsToAdd.push('needs-human-review');
+    }
+  } else {
+    // Add retry label
+    labelsToAdd.push(`retry-${task.retries + 1}`);
+  }
+  
+  if (task.issue) {
+    try {
+      await addLabels(task.repository, task.issue.number, labelsToAdd);
+      for (const label of labelsToRemove) {
+        await removeLabel(task.repository, task.issue.number, label).catch(() => {});
+      }
+    } catch (err) {
+      console.error('Failed to update labels:', err);
+    }
+  }
+  
+  // Send notifications
+  if (config.notifyOnFailure !== false) {
+    try {
+      await notifyTaskFailure(task, error, errorType, willRetry);
+    } catch (err) {
+      console.error('Failed to send failure notification:', err);
+    }
+  }
+  
+  return {
+    errorType,
+    errorDetails,
+    willRetry,
+    handled: true
+  };
+}
 
 /**
  * Process a task using Kimi CLI
@@ -34,6 +256,11 @@ export async function processTask(task, workspaceManager, contextManager) {
     }
   } catch (error) {
     console.error(`❌ Task processing failed:`, error);
+    
+    // Handle error with categorization, labeling, and notifications
+    await handleTaskError(task, error);
+    
+    // Re-throw to allow retry logic in github-relay
     throw error;
   }
 }

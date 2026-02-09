@@ -97,7 +97,7 @@ export async function notifyTaskComplete(task, result) {
 }
 
 /**
- * Notify task failure
+ * Notify task failure with error type and retry information
  */
 export async function notifyTaskFailed(task, error) {
   const { action, repository, issue, pullRequest } = task;
@@ -122,6 +122,91 @@ export async function notifyTaskFailed(task, error) {
   if (retries >= maxRetries) {
     message += `\n⚠️ *Max retries reached. Human intervention required.*`;
   }
+  
+  await sendTelegramMessage(message);
+}
+
+/**
+ * Enhanced task failure notification with error type
+ */
+export async function notifyTaskFailure(task, error, errorType, willRetry) {
+  const { action, repository, issue, pullRequest } = task;
+  const retries = task.retries || 0;
+  const maxRetries = parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
+  
+  const errorEmoji = {
+    'quota_exceeded': '💳',
+    'context_overflow': '📊',
+    'network_error': '🌐',
+    'timeout': '⏱️',
+    'git_conflict': '🔀',
+    'unknown': '❓'
+  };
+  
+  const emoji = errorEmoji[errorType] || '❌';
+  
+  let message = `${emoji} *Task Failed - ${errorType.replace(/_/g, ' ').toUpperCase()}*\n\n`;
+  message += `*Repository:* ${repository}\n`;
+  message += `*Action:* ${action}\n`;
+  
+  if (issue) {
+    message += `*Issue:* #${issue.number} - ${issue.title}\n`;
+    message += `*Link:* ${issue.html_url}\n`;
+  }
+  
+  if (pullRequest) {
+    message += `*PR:* #${pullRequest.number} - ${pullRequest.title}\n`;
+    message += `*Link:* ${pullRequest.html_url}\n`;
+  }
+  
+  message += `*Attempt:* ${retries + 1}/${maxRetries}\n`;
+  message += `*Error Type:* ${errorType}\n`;
+  
+  if (willRetry) {
+    message += `\n🔄 *Auto-retry scheduled*`;
+  } else if (retries >= maxRetries) {
+    message += `\n⚠️ *Max retries reached. Human intervention required.*`;
+  }
+  
+  await sendTelegramMessage(message);
+}
+
+/**
+ * Notify recovery workflow triggered
+ */
+export async function notifyRecovery(issueNumber, repository, hoursSinceLabeled) {
+  let message = `🔄 *Stuck Issue Recovery*\n\n`;
+  message += `*Repository:* ${repository}\n`;
+  message += `*Issue:* #${issueNumber}\n`;
+  message += `*Time Stuck:* ${hoursSinceLabeled} hours\n`;
+  message += `\nThe issue was marked as \`kimi-working\` but did not complete. Recovery actions have been taken.\n`;
+  message += `\n*Labels Updated:*\n`;
+  message += `- Removed: \`kimi-working\`, \`in-progress\`\n`;
+  message += `- Added: \`kimi-recovered\`, \`needs-human-review\`\n`;
+  
+  await sendTelegramMessage(message);
+}
+
+/**
+ * Notify retry attempt
+ */
+export async function notifyRetry(task, attemptNumber, maxRetries) {
+  const { action, repository, issue, pullRequest } = task;
+  
+  let message = `🔄 *Retry Attempt ${attemptNumber}/${maxRetries}*\n\n`;
+  message += `*Repository:* ${repository}\n`;
+  message += `*Action:* ${action}\n`;
+  
+  if (issue) {
+    message += `*Issue:* #${issue.number} - ${issue.title}\n`;
+    message += `*Link:* ${issue.html_url}\n`;
+  }
+  
+  if (pullRequest) {
+    message += `*PR:* #${pullRequest.number}\n`;
+  }
+  
+  message += `\nRetrying after previous failure...`;
   
   await sendTelegramMessage(message);
 }

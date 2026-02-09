@@ -18,7 +18,7 @@ usage() {
   echo ""
   echo "Example: $0 drbobber/Kimi-github-agent"
   echo ""
-  echo "Environment: Requires GITHUB_TOKEN to be set"
+  echo "Environment: Requires either authenticated 'gh' CLI or GITHUB_TOKEN (for API fallback)"
   exit 1
 }
 

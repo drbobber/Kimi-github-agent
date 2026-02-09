@@ -33,9 +33,10 @@ jobs:
             const thresholdHours = parseInt('${{ github.event.inputs.threshold_hours || '2' }}');
             const thresholdMs = thresholdHours * 60 * 60 * 1000;
             const maxEventPages = parseInt('${{ github.event.inputs.max_event_pages || '5' }}');
+            const eventsPerPage = 100; // GitHub API events per page
             
             console.log(`🔍 Looking for issues stuck with 'kimi-working' label for more than ${thresholdHours} hours...`);
-            console.log(`📄 Checking up to ${maxEventPages} pages of events per issue (${maxEventPages * 100} events)`);
+            console.log(`📄 Checking up to ${maxEventPages} pages of events per issue (${maxEventPages * eventsPerPage} events)`);
             
             // Get all open issues with kimi-working label
             const issues = await github.rest.issues.listForRepo({
@@ -68,12 +69,12 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
-                  per_page: 100,
+                  per_page: eventsPerPage,
                   page: page
                 });
                 
                 allEvents = allEvents.concat(events.data);
-                hasMore = events.data.length === 100;
+                hasMore = events.data.length === eventsPerPage;
                 page++;
               }
               

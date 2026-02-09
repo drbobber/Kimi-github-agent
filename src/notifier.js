@@ -1,4 +1,5 @@
 import { Bot } from 'grammy';
+import { getMaxRetries } from './config-loader.js';
 
 let bot = null;
 
@@ -187,9 +188,6 @@ export async function notifyRecovery(issueNumber, repository, hoursSinceLabeled)
   await sendTelegramMessage(message);
 }
 
-/**
- * Notify retry attempt
- */
 export async function notifyRetry(task, attemptNumber, maxRetries) {
   const { action, repository, issue, pullRequest } = task;
   

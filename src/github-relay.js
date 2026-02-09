@@ -87,6 +87,8 @@ export class GitHubRelay {
           
           // Schedule retry with delay
           // NOTE: Retries scheduled with setTimeout are lost if the process restarts.
+          // After restart, failed tasks won't automatically retry.
+          // Workaround: Manually re-add 'kimi-ready' label to retry the task.
           // For production use with high reliability requirements, consider implementing
           // a persistent queue (e.g., Redis, database, or file-based queue).
           setTimeout(() => {

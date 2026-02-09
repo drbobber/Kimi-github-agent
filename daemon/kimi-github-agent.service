@@ -1,0 +1,27 @@
+[Unit]
+Description=Kimi GitHub Agent
+Documentation=https://github.com/drbobber/Kimi-github-agent
+After=network.target
+
+[Service]
+Type=simple
+User=kimi
+WorkingDirectory=/opt/kimi-github-agent
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/kimi-github-agent/.env
+ExecStart=/usr/bin/node /opt/kimi-github-agent/src/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kimi-agent
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/kimi-github-agent/workspaces /opt/kimi-github-agent/sessions
+
+[Install]
+WantedBy=multi-user.target

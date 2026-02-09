@@ -1,0 +1,203 @@
+name: Handle PR Failures
+
+on:
+  workflow_run:
+    workflows: ["*"]
+    types:
+      - completed
+
+jobs:
+  handle-failure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    
+    steps:
+      - name: Get PR number
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pullRequests = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `${context.repo.owner}:${github.event.workflow_run.head_branch}`,
+              state: 'open'
+            });
+            
+            if (pullRequests.data.length === 0) {
+              console.log('No open PR found for this branch');
+              return null;
+            }
+            
+            const pr = pullRequests.data[0];
+            console.log(`Found PR #${pr.number}`);
+            
+            // Check if PR is from Kimi (branch starts with kimi/)
+            if (!pr.head.ref.startsWith('kimi/')) {
+              console.log('PR is not from Kimi, skipping');
+              return null;
+            }
+            
+            core.setOutput('pr_number', pr.number);
+            core.setOutput('pr_branch', pr.head.ref);
+            return pr.number;
+
+      - name: Get failure logs
+        id: logs
+        if: steps.pr.outputs.result != 'null'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runId = github.event.workflow_run.id;
+            
+            // Get jobs for this run
+            const jobs = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId
+            });
+            
+            let failureLogs = '';
+            
+            for (const job of jobs.data.jobs) {
+              if (job.conclusion === 'failure') {
+                failureLogs += `\n## Job: ${job.name}\n`;
+                failureLogs += `Status: ${job.conclusion}\n`;
+                failureLogs += `URL: ${job.html_url}\n\n`;
+                
+                // Add step failures
+                for (const step of job.steps) {
+                  if (step.conclusion === 'failure') {
+                    failureLogs += `### Step: ${step.name}\n`;
+                    failureLogs += `Conclusion: ${step.conclusion}\n\n`;
+                  }
+                }
+              }
+            }
+            
+            core.setOutput('logs', failureLogs);
+            return failureLogs;
+
+      - name: Check retry count
+        id: retry
+        if: steps.pr.outputs.result != 'null'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = ${{ steps.pr.outputs.pr_number }};
+            
+            // Get PR comments to count retry attempts
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            
+            const retryComments = comments.data.filter(c => 
+              c.body.includes('🔧 Kimi is fixing the CI failures') ||
+              c.body.includes('attempt')
+            );
+            
+            const retryCount = retryComments.length;
+            const maxRetries = 3;
+            
+            console.log(`Current retry count: ${retryCount}/${maxRetries}`);
+            
+            core.setOutput('retry_count', retryCount);
+            core.setOutput('should_retry', retryCount < maxRetries);
+            return retryCount < maxRetries;
+
+      - name: Notify Kimi agent
+        if: |
+          steps.pr.outputs.result != 'null' && 
+          steps.retry.outputs.should_retry == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = ${{ steps.pr.outputs.pr_number }};
+            const logs = `${{ steps.logs.outputs.logs }}`;
+            const retryCount = parseInt('${{ steps.retry.outputs.retry_count }}');
+            
+            // Add comment to PR
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: `🔧 Kimi is fixing the CI failures (attempt ${retryCount + 1}/3)...\n\nWorkflow run: ${github.event.workflow_run.html_url}`
+            });
+            
+            // TODO: Call Kimi relay webhook
+            // Uncomment when KIMI_RELAY_URL secret is configured
+            /*
+            const relayUrl = process.env.KIMI_RELAY_URL;
+            const relayToken = process.env.KIMI_RELAY_TOKEN;
+            
+            if (relayUrl && relayToken) {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              
+              const response = await fetch(`${relayUrl}/webhook/github`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${relayToken}`
+                },
+                body: JSON.stringify({
+                  action: 'fix_pr_failures',
+                  repository: `${context.repo.owner}/${context.repo.repo}`,
+                  pullRequest: {
+                    number: pr.data.number,
+                    title: pr.data.title,
+                    head: {
+                      ref: pr.data.head.ref
+                    },
+                    html_url: pr.data.html_url
+                  },
+                  workflowRun: {
+                    id: github.event.workflow_run.id,
+                    name: github.event.workflow_run.name,
+                    conclusion: github.event.workflow_run.conclusion,
+                    html_url: github.event.workflow_run.html_url,
+                    logs: logs
+                  }
+                })
+              });
+              
+              console.log('Dispatched fix request to Kimi agent');
+            }
+            */
+
+      - name: Request human help
+        if: |
+          steps.pr.outputs.result != 'null' && 
+          steps.retry.outputs.should_retry == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = ${{ steps.pr.outputs.pr_number }};
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: '⚠️ **Human intervention required**\n\nKimi has attempted to fix the CI failures 3 times without success. Please review the failures manually.\n\nWorkflow run: ' + github.event.workflow_run.html_url
+            });
+            
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['needs-human-review']
+            });

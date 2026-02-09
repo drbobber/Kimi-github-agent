@@ -1,0 +1,91 @@
+name: "🤖 Kimi Task"
+description: "Create a task for Kimi agent"
+labels: ["kimi-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Creating a Task for Kimi Agent
+        
+        Fill out the form below to create a task that Kimi will automatically implement.
+        
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be implemented? Be clear and specific.
+      placeholder: |
+        Describe the feature or fix that needs to be implemented.
+        Include:
+        - What should be built/fixed
+        - Why it's needed
+        - Any relevant context
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: "List any blocking issues that must be completed first (format: - [ ] #123)"
+      placeholder: |
+        - [ ] #123
+        - [ ] #456
+      value: "None"
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What conditions must be met for this task to be considered complete?
+      placeholder: |
+        - [ ] Feature X is implemented
+        - [ ] Tests pass
+        - [ ] Documentation is updated
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical_notes
+    attributes:
+      label: Technical Notes
+      description: Any implementation details, constraints, or technical considerations
+      placeholder: |
+        - Use library X for feature Y
+        - Follow pattern Z
+        - Don't modify file A
+
+  - type: textarea
+    id: files_to_modify
+    attributes:
+      label: Files to Modify (Optional)
+      description: Suggest which files might need changes
+      placeholder: |
+        - src/components/Button.js
+        - src/styles/theme.css
+        - docs/README.md
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this task?
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+      default: 1
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have checked that this issue doesn't already exist
+          required: true
+        - label: I have listed all dependencies (or marked as "None")
+          required: true
+        - label: The description is clear and actionable
+          required: true

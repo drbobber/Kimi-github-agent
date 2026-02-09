@@ -1,0 +1,117 @@
+name: Process Ready Issues
+
+on:
+  schedule:
+    # Run every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  find-ready-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    
+    steps:
+      - name: Find and dispatch ready issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            console.log('🔍 Looking for ready issues...');
+            
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'kimi-ready',
+              per_page: 100
+            });
+            
+            console.log(`Found ${issues.data.length} issues with 'kimi-ready' label`);
+            
+            for (const issue of issues.data) {
+              // Skip pull requests
+              if (issue.pull_request) {
+                console.log(`⏭️  Skipping PR #${issue.number}`);
+                continue;
+              }
+              
+              // Skip if already in progress
+              const isInProgress = issue.labels.some(l => 
+                l.name === 'in-progress' || l.name === 'kimi-working'
+              );
+              
+              if (isInProgress) {
+                console.log(`⏭️  Skipping in-progress issue #${issue.number}`);
+                continue;
+              }
+              
+              // Check for unchecked dependencies
+              const body = issue.body || '';
+              const uncheckedDeps = body.match(/- \[ \] #\d+/g);
+              
+              if (uncheckedDeps && uncheckedDeps.length > 0) {
+                console.log(`⏳ Issue #${issue.number} has ${uncheckedDeps.length} unresolved dependencies`);
+                continue;
+              }
+              
+              // Issue is ready to be processed
+              console.log(`✅ Ready: #${issue.number} - ${issue.title}`);
+              
+              // Add in-progress labels
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['in-progress', 'kimi-working']
+              });
+              
+              // TODO: Call Kimi relay webhook
+              // Uncomment when KIMI_RELAY_URL secret is configured
+              /*
+              const relayUrl = process.env.KIMI_RELAY_URL;
+              const relayToken = process.env.KIMI_RELAY_TOKEN;
+              
+              if (relayUrl && relayToken) {
+                try {
+                  const response = await fetch(`${relayUrl}/webhook/github`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${relayToken}`
+                    },
+                    body: JSON.stringify({
+                      action: 'implement_issue',
+                      repository: `${context.repo.owner}/${context.repo.repo}`,
+                      issue: {
+                        number: issue.number,
+                        title: issue.title,
+                        body: issue.body,
+                        html_url: issue.html_url
+                      }
+                    })
+                  });
+                  
+                  if (response.ok) {
+                    console.log(`📤 Dispatched issue #${issue.number} to Kimi agent`);
+                  } else {
+                    console.error(`❌ Failed to dispatch issue #${issue.number}`);
+                  }
+                } catch (error) {
+                  console.error(`❌ Error dispatching issue #${issue.number}:`, error.message);
+                }
+              }
+              */
+              
+              // Add comment to notify
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '🤖 Kimi agent is now working on this issue...'
+              });
+            }
+            
+            console.log('✅ Issue processing complete');

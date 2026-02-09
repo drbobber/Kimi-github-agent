@@ -11,6 +11,11 @@ on:
         required: false
         default: '2'
         type: string
+      max_event_pages:
+        description: 'Maximum event pages to check per issue (100 events per page)'
+        required: false
+        default: '5'
+        type: string
 
 jobs:
   recover-stuck-issues:
@@ -27,8 +32,10 @@ jobs:
           script: |
             const thresholdHours = parseInt('${{ github.event.inputs.threshold_hours || '2' }}');
             const thresholdMs = thresholdHours * 60 * 60 * 1000;
+            const maxEventPages = parseInt('${{ github.event.inputs.max_event_pages || '5' }}');
             
             console.log(`🔍 Looking for issues stuck with 'kimi-working' label for more than ${thresholdHours} hours...`);
+            console.log(`📄 Checking up to ${maxEventPages} pages of events per issue (${maxEventPages * 100} events)`);
             
             // Get all open issues with kimi-working label
             const issues = await github.rest.issues.listForRepo({
@@ -56,7 +63,7 @@ jobs:
               let page = 1;
               let hasMore = true;
               
-              while (hasMore && page <= 5) { // Limit to 5 pages (500 events) to prevent runaway queries
+              while (hasMore && page <= maxEventPages) {
                 const events = await github.rest.issues.listEvents({
                   owner: context.repo.owner,
                   repo: context.repo.repo,

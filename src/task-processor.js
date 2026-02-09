@@ -2,8 +2,7 @@ import { spawn } from 'child_process';
 import { buildImplementationPrompt, buildFixPrompt, buildReviewResponsePrompt } from './prompt-builder.js';
 import { createPullRequest, addComment, addLabels, removeLabel } from './github-api.js';
 import { notifyHumanRequired, notifyTaskFailure } from './notifier.js';
-import fs from 'fs/promises';
-import path from 'path';
+import { getErrorConfig, getMaxRetries } from './config-loader.js';
 
 /**
  * Error types for categorization
@@ -127,27 +126,12 @@ function getErrorDetails(errorType) {
 }
 
 /**
- * Load error handling configuration
- */
-async function loadErrorConfig() {
-  try {
-    const configPath = path.join(process.cwd(), 'config.json');
-    const content = await fs.readFile(configPath, 'utf-8');
-    const config = JSON.parse(content);
-    return config.errorHandling || {};
-  } catch (error) {
-    console.warn('⚠️  Could not load config.json, using defaults');
-    return {};
-  }
-}
-
-/**
  * Handle task error with proper logging, labeling, and notifications
  */
 async function handleTaskError(task, error) {
   const errorType = categorizeError(error);
   const errorDetails = getErrorDetails(errorType);
-  const config = await loadErrorConfig();
+  const config = await getErrorConfig();
   
   console.error(`❌ Task failed with ${errorType}:`, error.message);
   
@@ -161,7 +145,7 @@ async function handleTaskError(task, error) {
     commentBody += `- ${suggestion}\n`;
   });
   
-  const maxRetries = config.maxRetries || parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
+  const maxRetries = getMaxRetries(config);
   const willRetry = task.retries < maxRetries && config.enableAutoRetry !== false;
   
   if (willRetry) {

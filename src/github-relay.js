@@ -1,21 +1,6 @@
 import { processTask } from './task-processor.js';
 import { notifyTaskStart, notifyTaskComplete, notifyTaskFailed, notifyRetry } from './notifier.js';
-import fs from 'fs/promises';
-import path from 'path';
-
-/**
- * Load configuration from config.json
- */
-async function loadConfig() {
-  try {
-    const configPath = path.join(process.cwd(), 'config.json');
-    const content = await fs.readFile(configPath, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    console.warn('⚠️  Could not load config.json, using defaults');
-    return {};
-  }
-}
+import { getErrorConfig, getMaxRetries, getRetryDelayMinutes, isAutoRetryEnabled } from './config-loader.js';
 
 /**
  * GitHubRelay manages the task queue and processes GitHub webhook events
@@ -66,8 +51,8 @@ export class GitHubRelay {
         
         // Notify retry if this is not the first attempt
         if (task.retries > 0) {
-          const config = await loadConfig();
-          const maxRetries = config.errorHandling?.maxRetries || parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
+          const config = await getErrorConfig();
+          const maxRetries = getMaxRetries(config);
           await notifyRetry(task, task.retries + 1, maxRetries);
         } else {
           await notifyTaskStart(task);
@@ -86,15 +71,15 @@ export class GitHubRelay {
         console.error('❌ Task failed:', error.message);
 
         // Retry logic with exponential backoff
-        const config = await loadConfig();
-        const maxRetries = config.errorHandling?.maxRetries || parseInt(process.env.MAX_RETRY_ATTEMPTS || '3');
-        const enableAutoRetry = config.errorHandling?.enableAutoRetry !== false;
+        const config = await getErrorConfig();
+        const maxRetries = getMaxRetries(config);
+        const enableAutoRetry = isAutoRetryEnabled(config);
         
         if (task.retries < maxRetries && enableAutoRetry && this.shouldRetry(error)) {
           task.retries++;
           
           // Calculate delay with exponential backoff
-          const delayMinutes = config.errorHandling?.retryDelayMinutes || [5, 15, 30];
+          const delayMinutes = getRetryDelayMinutes(config);
           const delayIndex = Math.min(task.retries - 1, delayMinutes.length - 1);
           const delayMs = delayMinutes[delayIndex] * 60 * 1000;
           

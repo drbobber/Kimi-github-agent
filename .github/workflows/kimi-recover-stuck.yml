@@ -80,29 +80,25 @@ jobs:
                 console.log(`🚨 Issue #${issue.number} is stuck! Recovering...`);
                 
                 // Add recovery comment
-                const commentBody = `🔄 **Stuck Issue Recovery**
-                
-This issue has been marked as \`kimi-working\` for more than ${thresholdHours} hours without completion. This usually indicates:
-
-- The agent process crashed or was terminated
-- A network error prevented completion
-- The task exceeded the timeout limit
-- An unexpected error occurred
-
-**Recovery Actions Taken:**
-✅ Removed \`kimi-working\` label
-✅ Removed \`in-progress\` label  
-✅ Added \`kimi-recovered\` label
-✅ Added \`needs-human-review\` label
-
-**Next Steps:**
-1. Review any error logs or comments above
-2. Verify if partial work was committed to a branch
-3. Check if the issue needs to be re-queued with \`kimi-ready\` label
-4. Consider if the issue needs human intervention or clarification
-
-Time since work started: ${hoursSinceLabeled} hours
-Recovery triggered: ${now.toISOString()}`;
+                let commentBody = '🔄 **Stuck Issue Recovery**\n\n';
+                commentBody += `This issue has been marked as \`kimi-working\` for more than ${thresholdHours} hours without completion. `;
+                commentBody += 'This usually indicates:\n\n';
+                commentBody += '- The agent process crashed or was terminated\n';
+                commentBody += '- A network error prevented completion\n';
+                commentBody += '- The task exceeded the timeout limit\n';
+                commentBody += '- An unexpected error occurred\n\n';
+                commentBody += '**Recovery Actions Taken:**\n\n';
+                commentBody += '- Removed `kimi-working` label\n';
+                commentBody += '- Removed `in-progress` label\n';
+                commentBody += '- Added `kimi-recovered` label\n';
+                commentBody += '- Added `needs-human-review` label\n\n';
+                commentBody += '**Next Steps:**\n\n';
+                commentBody += '1. Review any error logs or comments above\n';
+                commentBody += '2. Verify if partial work was committed to a branch\n';
+                commentBody += '3. Check if the issue needs to be re-queued with `kimi-ready` label\n';
+                commentBody += '4. Consider if the issue needs human intervention or clarification\n\n';
+                commentBody += `Time since work started: ${hoursSinceLabeled} hours\n`;
+                commentBody += `Recovery triggered: ${now.toISOString()}`;
                 
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,

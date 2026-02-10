@@ -29,7 +29,9 @@ ${issue.body || 'No description provided'}
 - Make minimal, focused changes that directly address the issue
 - Preserve existing functionality
 - Add comments where necessary
-- Commit your changes when done
+- DO NOT commit or push - the agent will handle this automatically
+- DO NOT create a pull request - the agent will handle this automatically
+- Simply create/modify the files needed to implement the solution
 
 Please implement this issue now.`;
 }
@@ -72,6 +74,7 @@ ${logs}
 - Focus on fixing the specific failures shown in the logs
 - Make minimal changes necessary to fix the issues
 - Test your changes thoroughly
+- DO NOT commit or push - the agent will handle this automatically
 - If the issue is not fixable automatically, explain why
 
 Please fix these CI failures now.`;

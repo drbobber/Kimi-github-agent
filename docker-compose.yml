@@ -1,0 +1,36 @@
+services:
+  kimi-github-agent:
+    image: node:20-alpine
+    container_name: kimi-github-agent-app
+    working_dir: /app
+    volumes:
+      - /home/abds/clawd/Kimi-github-agent:/app
+      - /home/abds/clawd/kimi-workspaces:/app/workspaces
+      - /home/abds/clawd/.kimi-sessions:/app/sessions
+      - /home/abds/.local/bin/kimi:/usr/local/bin/kimi:ro
+      - /home/abds/.local/share/pipx:/usr/local/share/pipx:ro
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - KIMI_RELAY_TOKEN=${KIMI_RELAY_TOKEN}
+      - KIMI_PATH=/usr/local/bin/kimi
+      - WORKSPACES_DIR=/app/workspaces
+      - SESSIONS_DIR=/app/sessions
+    command: sh -c "npm install && npm start"
+    networks:
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kimi-agent.rule=Host(`kimi.vovooutlet.com`)"
+      - "traefik.http.routers.kimi-agent.entrypoints=http"
+      - "traefik.http.routers.kimi-agent-secure.rule=Host(`kimi.vovooutlet.com`)"
+      - "traefik.http.routers.kimi-agent-secure.entrypoints=https"
+      - "traefik.http.routers.kimi-agent-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kimi-agent.loadbalancer.server.port=3001"
+      - "coolify.managed=true"
+    restart: unless-stopped
+
+networks:
+  coolify:
+    external: true
